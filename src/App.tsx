@@ -32,18 +32,18 @@ import {
 } from 'lucide-react';
 
 // Type definitions
-interface CalendarEvent {
-  id: string;
-  title: string;
-  description: string;
-  date: string; // YYYY-MM-DD
-  category: 'birthday' | 'holiday' | 'meeting' | 'task';
-  tag: 'Urgent' | 'Running' | 'Ongoing';
-  isAllDay: boolean;
-  startTime: string; // e.g. "10:00 AM"
-  endTime: string; // e.g. "02:00 PM"
-  isCompleted: boolean;
-}
+import {
+  CalendarEvent,
+  isDirectMode,
+  getSyncStatus,
+  hybridSignUp,
+  hybridLogIn,
+  hybridResend,
+  hybridFetchEvents,
+  hybridCreateEvent,
+  hybridUpdateEvent,
+  hybridDeleteEvent
+} from './supabase';
 
 type ThemeType = 'coral' | 'teal' | 'indigo' | 'rose';
 
@@ -250,6 +250,9 @@ export default function App() {
   const [resendSuccess, setResendSuccess] = useState(false);
   const [showSetupGuide, setShowSetupGuide] = useState(false);
   const [profileModalOpen, setProfileModalOpen] = useState(false);
+  const [localSupabaseUrl, setLocalSupabaseUrl] = useState(() => localStorage.getItem('local_supabase_url') || '');
+  const [localSupabaseKey, setLocalSupabaseKey] = useState(() => localStorage.getItem('local_supabase_anon_key') || '');
+  const [showDirectCredentials, setShowDirectCredentials] = useState(false);
 
   // Logout handler
   const handleLogout = () => {
@@ -320,20 +323,15 @@ export default function App() {
     async function initSupabaseSync() {
       setIsLoadingSupabase(true);
       try {
-        const res = await fetch('/api/supabase-status');
-        const status = await res.json();
+        const status = await getSyncStatus();
         setSupabaseStatus(status);
 
         if (status.configured) {
-          const headers: any = {};
-          if (currentUser && currentUser.id) {
-            headers['x-user-id'] = currentUser.id;
-          }
-          const eventsRes = await fetch('/api/events', { headers });
-          const data = await eventsRes.json();
+          const userId = (currentUser && !currentUser.isGuest) ? currentUser.id : null;
+          const data = await hybridFetchEvents(userId);
           if (data.success) {
             setEvents(data.events || []);
-            if (currentUser) {
+            if (currentUser && !currentUser.isGuest) {
               showToast(`⚡ Synchronized perfectly with database for ${currentUser.email}!`);
             } else {
               showToast('⚡ Synchronized perfectly with your Supabase database!');
@@ -347,7 +345,7 @@ export default function App() {
           }
         }
       } catch (e) {
-        console.error('Failed to communicate with proxy API:', e);
+        console.error('Failed to communicate with Supabase:', e);
       } finally {
         setIsLoadingSupabase(false);
       }
@@ -519,16 +517,8 @@ export default function App() {
 
     if (supabaseStatus.configured) {
       try {
-        const headers: any = { 'Content-Type': 'application/json' };
-        if (currentUser && currentUser.id) {
-          headers['x-user-id'] = currentUser.id;
-        }
-        const res = await fetch('/api/events', {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(newEvent)
-        });
-        const data = await res.json();
+        const userId = (currentUser && !currentUser.isGuest) ? currentUser.id : null;
+        const data = await hybridCreateEvent(newEvent, userId);
         if (data.success) {
           setEvents(prev => [newEvent, ...prev]);
           showToast(`🎉 Created & synchronized ${newEvent.category} on Supabase!`);
@@ -537,7 +527,7 @@ export default function App() {
         }
       } catch (err) {
         console.error('Error creating event:', err);
-        showToast('❌ Backend connection failed');
+        showToast('❌ Database connection failed');
       }
     } else {
       setEvents(prev => [newEvent, ...prev]);
@@ -561,15 +551,8 @@ export default function App() {
 
     if (supabaseStatus.configured) {
       try {
-        const headers: any = {};
-        if (currentUser && currentUser.id) {
-          headers['x-user-id'] = currentUser.id;
-        }
-        const res = await fetch(`/api/events/${id}`, {
-          method: 'DELETE',
-          headers
-        });
-        const data = await res.json();
+        const userId = (currentUser && !currentUser.isGuest) ? currentUser.id : null;
+        const data = await hybridDeleteEvent(id, userId);
         if (data.success) {
           setEvents(prev => prev.filter(evt => evt.id !== id));
           showToast(`🗑️ Removed "${eventToDelete.title}" from Supabase`);
@@ -578,7 +561,7 @@ export default function App() {
         }
       } catch (err) {
         console.error('Error deleting event:', err);
-        showToast('❌ Backend connection failed');
+        showToast('❌ Database connection failed');
       }
     } else {
       setEvents(prev => prev.filter(evt => evt.id !== id));
@@ -595,16 +578,8 @@ export default function App() {
 
     if (supabaseStatus.configured) {
       try {
-        const headers: any = { 'Content-Type': 'application/json' };
-        if (currentUser && currentUser.id) {
-          headers['x-user-id'] = currentUser.id;
-        }
-        const res = await fetch(`/api/events/${id}`, {
-          method: 'PUT',
-          headers,
-          body: JSON.stringify({ isCompleted: nextCompletedState })
-        });
-        const data = await res.json();
+        const userId = (currentUser && !currentUser.isGuest) ? currentUser.id : null;
+        const data = await hybridUpdateEvent(id, { isCompleted: nextCompletedState }, userId);
         if (data.success) {
           setEvents(prev => prev.map(evt => {
             if (evt.id === id) {
@@ -618,7 +593,7 @@ export default function App() {
         }
       } catch (err) {
         console.error('Error toggling completion:', err);
-        showToast('❌ Backend connection failed');
+        showToast('❌ Database connection failed');
       }
     } else {
       setEvents(prev => prev.map(evt => {
@@ -642,31 +617,20 @@ export default function App() {
     setAuthLoading(true);
     setAuthError(null);
 
-    const endpoint = authIsSignUp ? '/api/auth/signup' : '/api/auth/login';
-
     try {
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: authEmail, password: authPassword }),
-      });
-      
-      let data: any = {};
-      const contentType = res.headers.get('content-type');
-      if (contentType && contentType.includes('application/json')) {
-        data = await res.json();
-      } else {
-        const text = await res.text();
-        throw new Error(text || `HTTP error! status: ${res.status}`);
-      }
-
-      if (res.ok && data.success) {
-        if (authIsSignUp) {
+      if (authIsSignUp) {
+        const data = await hybridSignUp(authEmail, authPassword);
+        if (data.success) {
           showToast('🎉 Registration successful! Verification required.');
           setRegisteredEmail(authEmail);
           setResendSuccess(false);
           setAuthPassword('');
         } else {
+          setAuthError(data.error || 'Registration failed. Please try again.');
+        }
+      } else {
+        const data = await hybridLogIn(authEmail, authPassword);
+        if (data.success && data.user) {
           const userSession = {
             id: data.user.id,
             email: data.user.email,
@@ -674,13 +638,13 @@ export default function App() {
           localStorage.setItem('calendar_user', JSON.stringify(userSession));
           setCurrentUser(userSession);
           showToast(`👋 Welcome back! Authenticated as ${data.user.email}`);
+        } else {
+          setAuthError(data.error || 'Authentication failed. Please verify credentials.');
         }
-      } else {
-        setAuthError(data.error || 'Authentication failed. Please verify credentials.');
       }
     } catch (err: any) {
       console.error('Authentication request error:', err);
-      setAuthError(`Authentication Error: ${err.message || 'Server unreachable. Try running locally or checking credentials.'}`);
+      setAuthError(`Authentication Error: ${err.message || 'Connection failed.'}`);
     } finally {
       setAuthLoading(false);
     }
@@ -694,14 +658,8 @@ export default function App() {
     setAuthError(null);
 
     try {
-      const res = await fetch('/api/auth/resend', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: registeredEmail }),
-      });
-
-      const data = await res.json();
-      if (res.ok && data.success) {
+      const data = await hybridResend(registeredEmail);
+      if (data.success) {
         setResendSuccess(true);
         showToast('✉️ Verification email resent successfully!');
       } else {
@@ -709,7 +667,7 @@ export default function App() {
       }
     } catch (err: any) {
       console.error('Resend error:', err);
-      setAuthError(`Resend Error: ${err.message || 'Server is unreachable.'}`);
+      setAuthError(`Resend Error: ${err.message || 'Connection failed.'}`);
     } finally {
       setResendLoading(false);
     }
@@ -1901,7 +1859,9 @@ export default function App() {
                       ? 'bg-indigo-100 text-indigo-800' 
                       : 'bg-slate-100 text-slate-600'
                   }`}>
-                    {supabaseStatus.configured ? 'Cloud Synced' : 'Local Storage Only'}
+                    {supabaseStatus.configured 
+                      ? (supabaseStatus.mode === 'direct' ? 'Direct Sync' : 'Proxy Sync') 
+                      : 'Offline'}
                   </span>
                 </div>
               </div>
@@ -1918,6 +1878,96 @@ export default function App() {
                     {selectedTheme}
                   </span>
                 </div>
+              </div>
+
+              {/* Hybrid Supabase Settings (e.g. for Vercel deployment) */}
+              <div className="w-full mt-4 border-t border-slate-100 pt-4">
+                <button
+                  type="button"
+                  id="btn-toggle-direct-supabase"
+                  onClick={() => setShowDirectCredentials(prev => !prev)}
+                  className="w-full text-left text-xs font-bold text-slate-500 hover:text-slate-700 flex items-center justify-between gap-1 cursor-pointer transition-all"
+                >
+                  <span className="flex items-center gap-1.5">
+                    🔌 Supabase Direct Config (Vercel)
+                  </span>
+                  <span className="text-[10px] bg-slate-100 px-1.5 py-0.5 rounded text-slate-500 font-normal">
+                    {showDirectCredentials ? 'Hide' : 'Configure'}
+                  </span>
+                </button>
+
+                {showDirectCredentials && (
+                  <form 
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      if (localSupabaseUrl.trim() && localSupabaseKey.trim()) {
+                        localStorage.setItem('local_supabase_url', localSupabaseUrl.trim());
+                        localStorage.setItem('local_supabase_anon_key', localSupabaseKey.trim());
+                        showToast('✅ Saved custom Supabase keys successfully! Reloading...');
+                        setTimeout(() => window.location.reload(), 1500);
+                      } else {
+                        localStorage.removeItem('local_supabase_url');
+                        localStorage.removeItem('local_supabase_anon_key');
+                        showToast('🔄 Cleared custom Supabase keys. Reloading to default...');
+                        setTimeout(() => window.location.reload(), 1500);
+                      }
+                    }}
+                    className="mt-3 bg-slate-50 border border-slate-100 p-3 rounded-2xl space-y-2.5 text-left"
+                  >
+                    <p className="text-[10px] text-slate-500 leading-relaxed">
+                      If your Vercel deployment does not have server environment variables, enter your credentials below to connect directly from the browser:
+                    </p>
+                    
+                    <div>
+                      <label className="block text-[9px] font-bold text-slate-400 uppercase tracking-wide mb-1">Supabase Project URL</label>
+                      <input
+                        type="url"
+                        placeholder="https://yourproject.supabase.co"
+                        value={localSupabaseUrl}
+                        required
+                        onChange={(e) => setLocalSupabaseUrl(e.target.value)}
+                        className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[9px] font-bold text-slate-400 uppercase tracking-wide mb-1">Anon/Public Client Key</label>
+                      <input
+                        type="password"
+                        placeholder="eyJhbGciOiJIUzI1NiIsInR5..."
+                        value={localSupabaseKey}
+                        required
+                        onChange={(e) => setLocalSupabaseKey(e.target.value)}
+                        className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
+                      />
+                    </div>
+
+                    <div className="flex gap-2 pt-1">
+                      <button
+                        type="submit"
+                        className={`flex-1 py-1.5 ${currentThemeStyles.primary} hover:opacity-90 text-white rounded-lg text-[11px] font-bold transition-all cursor-pointer text-center`}
+                      >
+                        Save & Sync Direct
+                      </button>
+                      {(localStorage.getItem('local_supabase_url') || localStorage.getItem('local_supabase_anon_key')) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            localStorage.removeItem('local_supabase_url');
+                            localStorage.removeItem('local_supabase_anon_key');
+                            setLocalSupabaseUrl('');
+                            setLocalSupabaseKey('');
+                            showToast('🗑️ Cleared custom keys. Reloading...');
+                            setTimeout(() => window.location.reload(), 1500);
+                          }}
+                          className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-100 rounded-lg text-[11px] font-bold transition-all cursor-pointer text-center"
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
+                  </form>
+                )}
               </div>
 
               {/* Action buttons */}
