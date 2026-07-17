@@ -1140,21 +1140,6 @@ export default function App() {
                     </button>
                   </div>
 
-                  {/* Guest / Bypass Button */}
-                  <div className="relative flex py-3 items-center">
-                    <div className="flex-grow border-t border-slate-100"></div>
-                    <span className="flex-shrink mx-2 text-[9px] text-slate-400 font-bold uppercase tracking-wider">or</span>
-                    <div className="flex-grow border-t border-slate-100"></div>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={handleContinueAsGuest}
-                    className="w-full py-2 bg-slate-50 hover:bg-slate-100 rounded-xl text-xs font-bold text-slate-600 border border-slate-200 hover:border-slate-300 transition-all cursor-pointer text-center"
-                  >
-                    Continue as Guest ⚡
-                  </button>
-
                 </div>
               )}
 
