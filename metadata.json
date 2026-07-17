@@ -1,0 +1,6 @@
+{
+  "name": "Event Calendar",
+  "description": "A beautiful interactive calendar with customizable events, color-coded categories for birthdays, public holidays, and meetings.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
